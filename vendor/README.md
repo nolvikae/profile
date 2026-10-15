@@ -1,16 +1,24 @@
-# Vendor Sources - Nolvikae Profile
+# Vendor — images Node.js Pterodactyl
 
-Ce dossier contient les fichiers sources Docker pour Node.js.
+Fichiers sources pour construire des images Wings (utilisateur `container`, `/home/container`, entrypoint ash).
 
 ## Contenu
 
-- `Dockerfile` - Dockerfile pour Node.js 20 Alpine
-- `entrypoint.sh` - Script d'entrée
+- `entrypoint.sh` — script d’entrée (copie aussi dans chaque dossier de version)
+- `nodejs-12` … `nodejs-25` — un `Dockerfile` + `entrypoint.sh` par version
 
-## Source
+Chaque image part de `node:XX-alpine` et installe `ca-certificates curl ffmpeg git openssl sqlite tar tzdata`.
 
-Hébergé sur : https://github.com/nolvikae/profile
+## Build
 
-## Note
+Le contexte Docker **doit** être le dossier de version (pas le parent), sinon `COPY ./entrypoint.sh` échoue.
 
-Ces fichiers sont téléchargés depuis GitHub nolvikae/profile pendant l'installation de l'egg.
+```bash
+docker build -t ghcr.io/nolvikae/profile:nodejs_20 ./nodejs-20
+```
+
+## Panel
+
+L’egg importe les images publiques `ghcr.io/nolvikae/profile:nodejs_XX`.
+Ces Dockerfiles servent si tu veux publier tes propres tags, depuis le dépôt
+`nolvikae/profile` (seules GitHub et nodejs.org).
