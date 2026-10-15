@@ -1,16 +1,16 @@
-# Vendor Sources - Pterodactyl Yolks
+# Vendor Sources - Nolvikae Profile
 
-Ce dossier contient les fichiers sources originaux du dépôt Pterodactyl yolks.
+Ce dossier contient les fichiers sources Docker pour Node.js.
 
 ## Contenu
 
-- `Dockerfile` - Dockerfile original pour Node.js 20 Alpine
-- `entrypoint.sh` - Script d'entrée original
+- `Dockerfile` - Dockerfile pour Node.js 20 Alpine
+- `entrypoint.sh` - Script d'entrée
 
 ## Source
 
-Téléchargé depuis : https://github.com/pterodactyl/yolks
+Hébergé sur : https://github.com/nolvikae/profile
 
 ## Note
 
-Ces fichiers sont fournis à titre de référence. L'egg Nolvikae utilise Node.js téléchargé depuis nodejs.org et n'utilise pas ces fichiers Docker de Pterodactyl.
+Ces fichiers sont téléchargés depuis GitHub nolvikae/profile pendant l'installation de l'egg.

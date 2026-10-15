@@ -9,7 +9,7 @@
 - **Node.js** : Téléchargé depuis nodejs.org et installé dans `.nolvikae/vendor/nodejs/`
 - **Code applicatif** : Cloné depuis ton GitHub (https://github.com/nolvikae/profile/)
 - **Logs** : Palette de 50 couleurs RGB, change à chaque ligne
-- **Base Docker** : Debian Bookworm Slim (pas de yolks Pterodactyl)
+- **Base Docker** : Debian Bookworm Slim
 
 ## Installation
 1. Dans Pterodactyl : **Admin → Nests → Import Egg**, importe le JSON.
@@ -25,6 +25,8 @@
 
 ## Fichiers générés
 - `.nolvikae/vendor/nodejs/` : Installation Node.js locale
+- `.nolvikae/vendor/Dockerfile` : Dockerfile téléchargé depuis GitHub
+- `.nolvikae/vendor/entrypoint.sh` : Script d'entrée téléchargé depuis GitHub
 - `.nolvikae/logger.cjs` : Wrapper pour colorer les logs
 - `.nolvikae/start.sh` : Script de démarrage avec PATH Node.js
 

@@ -21,8 +21,12 @@ VENDOR_REPO="${GIT_ADDRESS:-https://github.com/nolvikae/profile/}"
 VENDOR_URL="${VENDOR_REPO}raw/${BRANCH:-main}/vendor/"
 
 say "Téléchargement des fichiers vendor depuis ${VENDOR_URL}..."
-curl -fsSL "${VENDOR_URL}Dockerfile" -o /mnt/server/.nolvikae/vendor/Dockerfile || say "Dockerfile non disponible (optionnel)."
 curl -fsSL "${VENDOR_URL}entrypoint.sh" -o /mnt/server/.nolvikae/vendor/entrypoint.sh || say "entrypoint.sh non disponible (optionnel)."
+
+# Téléchargement du Dockerfile selon la version Node.js
+NODE_MAJOR="${NODE_VERSION%%.*}"
+VENDOR_DOCKERFILE="${VENDOR_URL}nodejs-${NODE_MAJOR}/Dockerfile"
+curl -fsSL "${VENDOR_DOCKERFILE}" -o /mnt/server/.nolvikae/vendor/Dockerfile || say "Dockerfile pour Node.js ${NODE_MAJOR} non disponible (optionnel)."
 say "Fichiers vendor téléchargés."
 
 # Téléchargement de Node.js depuis nodejs.org
