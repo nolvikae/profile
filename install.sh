@@ -16,6 +16,15 @@ say "Préparation de l'installation Node.js..."
 command -v git >/dev/null 2>&1 || fail "git est absent du conteneur d'installation."
 command -v curl >/dev/null 2>&1 || fail "curl est absent du conteneur d'installation."
 
+# Téléchargement des fichiers vendor depuis GitHub nolvikae/profile
+VENDOR_REPO="${GIT_ADDRESS:-https://github.com/nolvikae/profile/}"
+VENDOR_URL="${VENDOR_REPO}raw/${BRANCH:-main}/vendor/"
+
+say "Téléchargement des fichiers vendor depuis ${VENDOR_URL}..."
+curl -fsSL "${VENDOR_URL}Dockerfile" -o /mnt/server/.nolvikae/vendor/Dockerfile || say "Dockerfile non disponible (optionnel)."
+curl -fsSL "${VENDOR_URL}entrypoint.sh" -o /mnt/server/.nolvikae/vendor/entrypoint.sh || say "entrypoint.sh non disponible (optionnel)."
+say "Fichiers vendor téléchargés."
+
 # Téléchargement de Node.js depuis nodejs.org
 NODE_VERSION="${NODE_VERSION:-20.11.1}"
 NODE_ARCH="${NODE_ARCH:-x64}"
