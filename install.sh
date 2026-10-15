@@ -194,6 +194,11 @@ if [[ -n "${NODE_PACKAGES:-}" ]]; then
   if (( ${#packages[@]} )); then /home/container/.nolvikae/vendor/nodejs/bin/npm install --no-save "${packages[@]}"; fi
 fi
 
+if [[ -n "${UNNODE_PACKAGES:-}" ]]; then
+  read -r -a packages <<< "$UNNODE_PACKAGES"
+  if (( ${#packages[@]} )); then /home/container/.nolvikae/vendor/nodejs/bin/npm uninstall "${packages[@]}"; fi
+fi
+
 exec /home/container/.nolvikae/vendor/nodejs/bin/node /home/container/.nolvikae/logger.cjs
 START
 chmod +x /mnt/server/.nolvikae/start.sh
@@ -215,6 +220,11 @@ fi
 if [[ -n "${NODE_PACKAGES:-}" ]]; then
   read -r -a packages <<< "$NODE_PACKAGES"
   if (( ${#packages[@]} )); then /mnt/server/.nolvikae/vendor/nodejs/bin/npm install --no-save "${packages[@]}" || fail "Installation des paquets supplémentaires impossible."; fi
+fi
+
+if [[ -n "${UNNODE_PACKAGES:-}" ]]; then
+  read -r -a packages <<< "$UNNODE_PACKAGES"
+  if (( ${#packages[@]} )); then /mnt/server/.nolvikae/vendor/nodejs/bin/npm uninstall "${packages[@]}" || say "Désinstallation des paquets impossible (optionnel)."; fi
 fi
 
 say "Installation terminée."

@@ -22,7 +22,7 @@
   },
   "scripts": {
     "installation": {
-      "script": "#!/bin/bash\nset -Eeuo pipefail\n\nsay() { printf '\\033[38;5;%sm[NOLVIKAE INSTALL]\\033[0m %s\\n' \"$(( ( $(date +%s) % 200 ) + 16 ))\" \"$*\"; }\nfail() { say \"ERREUR: $*\"; exit 1; }\n\napt-get update -y\napt-get install -y --no-install-recommends git curl ca-certificates xz-utils\nrm -rf /var/lib/apt/lists/*\n\nmkdir -p /mnt/server\nmkdir -p /mnt/server/.nolvikae/vendor\ncd /mnt/server\n\nsay \"Préparation de l'installation Node.js...\"\ncommand -v git >/dev/null 2>&1 || fail \"git est absent du conteneur d'installation.\"\ncommand -v curl >/dev/null 2>&1 || fail \"curl est absent du conteneur d'installation.\"\n\n# Téléchargement des fichiers vendor depuis GitHub nolvikae/profile\nVENDOR_REPO=\"${GIT_ADDRESS:-https://github.com/nolvikae/profile/}\"\nVENDOR_URL=\"${VENDOR_REPO}raw/${BRANCH:-main}/vendor/\"\n\nsay \"Téléchargement des fichiers vendor depuis ${VENDOR_URL}...\"\ncurl -fsSL \"${VENDOR_URL}entrypoint.sh\" -o /mnt/server/.nolvikae/vendor/entrypoint.sh || say \"entrypoint.sh non disponible (optionnel).\"\n\n# Téléchargement du Dockerfile selon la version Node.js\nNODE_MAJOR=\"${NODE_VERSION%%.*}\"\nVENDOR_DOCKERFILE=\"${VENDOR_URL}nodejs-${NODE_MAJOR}/Dockerfile\"\ncurl -fsSL \"${VENDOR_DOCKERFILE}\" -o /mnt/server/.nolvikae/vendor/Dockerfile || say \"Dockerfile pour Node.js ${NODE_MAJOR} non disponible (optionnel).\"\nsay \"Fichiers vendor téléchargés.\"\n\n# Téléchargement de Node.js depuis nodejs.org\nNODE_VERSION=\"${NODE_VERSION:-20.11.1}\"\nNODE_ARCH=\"${NODE_ARCH:-x64}\"\nNODE_DIR=\"node-v${NODE_VERSION}-linux-${NODE_ARCH}\"\nNODE_TAR=\"${NODE_DIR}.tar.xz\"\nNODE_URL=\"https://nodejs.org/dist/v${NODE_VERSION}/${NODE_TAR}\"\n\nsay \"Téléchargement de Node.js v${NODE_VERSION} depuis nodejs.org...\"\ncurl -fsSL \"${NODE_URL}\" -o \"/tmp/${NODE_TAR}\" || fail \"Impossible de télécharger Node.js depuis nodejs.org.\"\n\nsay \"Extraction de Node.js...\"\ntar -xJf \"/tmp/${NODE_TAR}\" -C /tmp || fail \"Impossible d'extraire Node.js.\"\nrm -f \"/tmp/${NODE_TAR}\"\n\nsay \"Installation de Node.js dans .nolvikae/vendor/...\"\nmv \"/tmp/${NODE_DIR}\" \"/mnt/server/.nolvikae/vendor/nodejs\"\nrm -rf /tmp/${NODE_DIR}\n\n# Export PATH pour Node.js local\nexport PATH=\"/mnt/server/.nolvikae/vendor/nodejs/bin:$PATH\"\nexport NODE_PATH=\"/mnt/server/.nolvikae/vendor/nodejs/lib/node_modules\"\n\nsay \"Vérification de Node.js...\"\n/mnt/server/.nolvikae/vendor/nodejs/bin/node --version || fail \"Node.js installation failed.\"\n/mnt/server/.nolvikae/vendor/nodejs/bin/npm --version || fail \"npm installation failed.\"\n\nif [[ \"${USER_UPLOAD:-0}\" == \"1\" || \"${USER_UPLOAD:-false}\" == \"true\" ]]; then\n  say \"USER_UPLOAD activé : clonage ignoré.\"\nelse\n  [[ -n \"${GIT_ADDRESS:-}\" ]] || fail \"Renseigne GIT_ADDRESS avec l'URL du dépôt GitHub.\"\n\n  REPO_URL=\"${GIT_ADDRESS}\"\n  [[ \"$REPO_URL\" == *.git ]] || REPO_URL=\"${REPO_URL%.git}.git\"\n\n  # Authentification facultative pour les dépôts privés. Ne jamais afficher le token.\n  if [[ -n \"${ACCESS_TOKEN:-}\" ]]; then\n    if [[ \"$REPO_URL\" =~ ^https://github\\.com/ ]]; then\n      REPO_PATH=\"${REPO_URL#https://github.com/}\"\n      REPO_URL=\"https://x-access-token:${ACCESS_TOKEN}@github.com/${REPO_PATH}\"\n    elif [[ -n \"${USERNAME:-}\" ]]; then\n      HOST_PATH=\"${REPO_URL#https://}\"\n      REPO_URL=\"https://${USERNAME}:${ACCESS_TOKEN}@${HOST_PATH}\"\n    fi\n  fi\n\n  if [[ -d .git ]]; then\n    say \"Dépôt Git existant détecté.\"\n    git remote set-url origin \"$REPO_URL\" 2>/dev/null || true\n    if [[ \"${CLEAN_INSTALL:-0}\" == \"1\" ]]; then\n      say \"Nettoyage des fichiers suivis avant mise à jour...\"\n      git reset --hard\n    fi\n    git fetch --all --prune\n    if [[ -n \"${BRANCH:-}\" ]]; then\n      git checkout -B \"$BRANCH\" \"origin/$BRANCH\" 2>/dev/null || git checkout \"$BRANCH\"\n      git pull --ff-only origin \"$BRANCH\" || fail \"Impossible de mettre à jour la branche $BRANCH.\"\n    else\n      git pull --ff-only || fail \"Impossible de mettre à jour le dépôt.\"\n    fi\n  else\n    # Refuse d'écraser des fichiers préexistants hors .git.\n    if find . -mindepth 1 -maxdepth 1 ! -name '.nolvikae' -print -quit | grep -q .; then\n      fail \"Le dossier contient déjà des fichiers sans dépôt Git. Vide-le ou active CLEAN_INSTALL après avoir sauvegardé tes données.\"\n    fi\n    if [[ -n \"${BRANCH:-}\" ]]; then\n      git clone --depth 1 --single-branch --branch \"$BRANCH\" \"$REPO_URL\" /tmp/nolvikae-repo || fail \"Clonage GitHub impossible (URL, branche, droits ou réseau).\"\n    else\n      git clone --depth 1 \"$REPO_URL\" /tmp/nolvikae-repo || fail \"Clonage GitHub impossible (URL, droits ou réseau).\"\n    fi\n    cp -a /tmp/nolvikae-repo/. /mnt/server/\n    rm -rf /tmp/nolvikae-repo\n  fi\nfi\n\n# Création du logger avec 50 couleurs\ncat > /mnt/server/.nolvikae/logger.cjs <<'LOGGER'\n'use strict';\nconst { spawn } = require('node:child_process');\nconst path = require('node:path');\n\nconst main = (process.env.MAIN_FILE || 'index.js').trim();\nconst args = (process.env.NODE_ARGS || '').match(/(?:[^\\s\"]+|\"[^\"]*\")+/g) || [];\nconst cleanArgs = args.map(v => v.replace(/^\"|\"$/g, ''));\nconst useColors = !['0', 'false', 'off', 'no'].includes(String(process.env.COLOR_LOGS || '1').toLowerCase());\n\n// 50 couleurs RGB distinctes. La couleur change à chaque ligne complète affichée.\nconst palette = Array.from({ length: 50 }, (_, i) => {\n  const h = (i * 137.508) % 360;\n  const s = 78, l = 62;\n  const c = (1 - Math.abs(2 * l / 100 - 1)) * s / 100;\n  const x = c * (1 - Math.abs((h / 60) % 2 - 1));\n  const m = l / 100 - c / 2;\n  let r = 0, g = 0, b = 0;\n  if (h < 60) [r,g,b] = [c,x,0];\n  else if (h < 120) [r,g,b] = [x,c,0];\n  else if (h < 180) [r,g,b] = [0,c,x];\n  else if (h < 240) [r,g,b] = [0,x,c];\n  else if (h < 300) [r,g,b] = [x,0,c];\n  else [r,g,b] = [c,0,x];\n  return `\\x1b[38;2;${Math.round((r+m)*255)};${Math.round((g+m)*255)};${Math.round((b+m)*255)}m`;\n});\nlet lineNumber = 0;\nfunction pipeLines(stream, target) {\n  let pending = '';\n  stream.setEncoding('utf8');\n  stream.on('data', chunk => {\n    pending += chunk;\n    const lines = pending.split(/\\r?\\n/);\n    pending = lines.pop();\n    for (const line of lines) emit(line, target);\n  });\n  stream.on('end', () => { if (pending.length) emit(pending, target); });\n}\nfunction emit(line, target) {\n  const color = palette[lineNumber++ % palette.length];\n  target.write((useColors ? color : '') + line + (useColors ? '\\x1b[0m' : '') + '\\n');\n}\nconst entry = path.resolve(process.cwd(), main);\nif (!require('node:fs').existsSync(entry)) {\n  console.error(`[NOLVIKAE] Fichier de démarrage introuvable : ${main}`);\n  process.exit(1);\n}\nconsole.log(`[NOLVIKAE] Démarrage de ${main} — palette de 50 couleurs ${useColors ? 'activée' : 'désactivée'}.`);\nconst child = spawn('/mnt/server/.nolvikae/vendor/nodejs/bin/node', [entry, ...cleanArgs], {\n  cwd: process.cwd(),\n  env: { ...process.env, PATH: '/mnt/server/.nolvikae/vendor/nodejs/bin:' + process.env.PATH },\n  stdio: ['inherit', 'pipe', 'pipe']\n});\npipeLines(child.stdout, process.stdout);\npipeLines(child.stderr, process.stderr);\nchild.on('error', err => { console.error('[NOLVIKAE] Impossible de lancer Node.js:', err.message); process.exitCode = 1; });\nchild.on('exit', (code, signal) => {\n  if (signal) console.log(`[NOLVIKAE] Processus arrêté par ${signal}.`);\n  process.exitCode = code === null ? 1 : code;\n});\nfor (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));\nLOGGER\n\n# Création du script de démarrage\ncat > /mnt/server/.nolvikae/start.sh <<'START'\n#!/bin/bash\nset -Eeuo pipefail\ncd /home/container\n\n# Ajout de Node.js local au PATH\nexport PATH=\"/home/container/.nolvikae/vendor/nodejs/bin:$PATH\"\nexport NODE_PATH=\"/home/container/.nolvikae/vendor/nodejs/lib/node_modules\"\n\nif [[ \"${AUTO_UPDATE:-0}\" == \"1\" && -d .git ]]; then\n  echo \"[NOLVIKAE] Mise à jour Git activée.\"\n  git pull --ff-only || { echo \"[NOLVIKAE] Échec de git pull.\"; exit 1; }\nfi\n\nif [[ \"${INSTALL_ON_START:-0}\" == \"1\" && -f package.json ]]; then\n  echo \"[NOLVIKAE] Installation/vérification des dépendances npm...\"\n  if [[ -f package-lock.json ]]; then /home/container/.nolvikae/vendor/nodejs/bin/npm ci --omit=dev || /home/container/.nolvikae/vendor/nodejs/bin/npm install --omit=dev\n  else /home/container/.nolvikae/vendor/nodejs/bin/npm install --omit=dev\n  fi\nfi\n\nif [[ -n \"${NODE_PACKAGES:-}\" ]]; then\n  read -r -a packages <<< \"$NODE_PACKAGES\"\n  if (( ${#packages[@]} )); then /home/container/.nolvikae/vendor/nodejs/bin/npm install --no-save \"${packages[@]}\"; fi\nfi\n\nexec /home/container/.nolvikae/vendor/nodejs/bin/node /home/container/.nolvikae/logger.cjs\nSTART\nchmod +x /mnt/server/.nolvikae/start.sh\n\n# Installation des dépendances npm avec Node.js local\nif [[ -f package.json ]]; then\n  say \"package.json trouvé.\"\n  if [[ \"${INSTALL_DEV_DEPENDENCIES:-0}\" == \"1\" ]]; then\n    /mnt/server/.nolvikae/vendor/nodejs/bin/npm install || fail \"npm install a échoué.\"\n  elif [[ -f package-lock.json ]]; then\n    /mnt/server/.nolvikae/vendor/nodejs/bin/npm ci --omit=dev || /mnt/server/.nolvikae/vendor/nodejs/bin/npm install --omit=dev || fail \"Installation des dépendances npm impossible.\"\n  else\n    /mnt/server/.nolvikae/vendor/nodejs/bin/npm install --omit=dev || fail \"Installation des dépendances npm impossible.\"\n  fi\nelse\n  say \"Aucun package.json détecté : dépôt cloné, aucune dépendance npm à installer.\"\nfi\n\nif [[ -n \"${NODE_PACKAGES:-}\" ]]; then\n  read -r -a packages <<< \"$NODE_PACKAGES\"\n  if (( ${#packages[@]} )); then /mnt/server/.nolvikae/vendor/nodejs/bin/npm install --no-save \"${packages[@]}\" || fail \"Installation des paquets supplémentaires impossible.\"; fi\nfi\n\nsay \"Installation terminée.\"\n",
+      "script": "#!/bin/bash\nset -Eeuo pipefail\n\nsay() { printf '\\033[38;5;%sm[NOLVIKAE INSTALL]\\033[0m %s\\n' \"$(( ( $(date +%s) % 200 ) + 16 ))\" \"$*\"; }\nfail() { say \"ERREUR: $*\"; exit 1; }\n\napt-get update -y\napt-get install -y --no-install-recommends git curl ca-certificates xz-utils\nrm -rf /var/lib/apt/lists/*\n\nmkdir -p /mnt/server\nmkdir -p /mnt/server/.nolvikae/vendor\ncd /mnt/server\n\nsay \"Préparation de l'installation Node.js...\"\ncommand -v git >/dev/null 2>&1 || fail \"git est absent du conteneur d'installation.\"\ncommand -v curl >/dev/null 2>&1 || fail \"curl est absent du conteneur d'installation.\"\n\n# Téléchargement des fichiers vendor depuis GitHub nolvikae/profile\nVENDOR_REPO=\"${GIT_ADDRESS:-https://github.com/nolvikae/profile/}\"\nVENDOR_URL=\"${VENDOR_REPO}raw/${BRANCH:-main}/vendor/\"\n\nsay \"Téléchargement des fichiers vendor depuis ${VENDOR_URL}...\"\ncurl -fsSL \"${VENDOR_URL}entrypoint.sh\" -o /mnt/server/.nolvikae/vendor/entrypoint.sh || say \"entrypoint.sh non disponible (optionnel).\"\n\n# Téléchargement du Dockerfile selon la version Node.js\nNODE_MAJOR=\"${NODE_VERSION%%.*}\"\nVENDOR_DOCKERFILE=\"${VENDOR_URL}nodejs-${NODE_MAJOR}/Dockerfile\"\ncurl -fsSL \"${VENDOR_DOCKERFILE}\" -o /mnt/server/.nolvikae/vendor/Dockerfile || say \"Dockerfile pour Node.js ${NODE_MAJOR} non disponible (optionnel).\"\nsay \"Fichiers vendor téléchargés.\"\n\n# Téléchargement de Node.js depuis nodejs.org\nNODE_VERSION=\"${NODE_VERSION:-20.11.1}\"\nNODE_ARCH=\"${NODE_ARCH:-x64}\"\nNODE_DIR=\"node-v${NODE_VERSION}-linux-${NODE_ARCH}\"\nNODE_TAR=\"${NODE_DIR}.tar.xz\"\nNODE_URL=\"https://nodejs.org/dist/v${NODE_VERSION}/${NODE_TAR}\"\n\nsay \"Téléchargement de Node.js v${NODE_VERSION} depuis nodejs.org...\"\ncurl -fsSL \"${NODE_URL}\" -o \"/tmp/${NODE_TAR}\" || fail \"Impossible de télécharger Node.js depuis nodejs.org.\"\n\nsay \"Extraction de Node.js...\"\ntar -xJf \"/tmp/${NODE_TAR}\" -C /tmp || fail \"Impossible d'extraire Node.js.\"\nrm -f \"/tmp/${NODE_TAR}\"\n\nsay \"Installation de Node.js dans .nolvikae/vendor/...\"\nmv \"/tmp/${NODE_DIR}\" \"/mnt/server/.nolvikae/vendor/nodejs\"\nrm -rf /tmp/${NODE_DIR}\n\n# Export PATH pour Node.js local\nexport PATH=\"/mnt/server/.nolvikae/vendor/nodejs/bin:$PATH\"\nexport NODE_PATH=\"/mnt/server/.nolvikae/vendor/nodejs/lib/node_modules\"\n\nsay \"Vérification de Node.js...\"\n/mnt/server/.nolvikae/vendor/nodejs/bin/node --version || fail \"Node.js installation failed.\"\n/mnt/server/.nolvikae/vendor/nodejs/bin/npm --version || fail \"npm installation failed.\"\n\nif [[ \"${USER_UPLOAD:-0}\" == \"1\" || \"${USER_UPLOAD:-false}\" == \"true\" ]]; then\n  say \"USER_UPLOAD activé : clonage ignoré.\"\nelse\n  [[ -n \"${GIT_ADDRESS:-}\" ]] || fail \"Renseigne GIT_ADDRESS avec l'URL du dépôt GitHub.\"\n\n  REPO_URL=\"${GIT_ADDRESS}\"\n  [[ \"$REPO_URL\" == *.git ]] || REPO_URL=\"${REPO_URL%.git}.git\"\n\n  # Authentification facultative pour les dépôts privés. Ne jamais afficher le token.\n  if [[ -n \"${ACCESS_TOKEN:-}\" ]]; then\n    if [[ \"$REPO_URL\" =~ ^https://github\\.com/ ]]; then\n      REPO_PATH=\"${REPO_URL#https://github.com/}\"\n      REPO_URL=\"https://x-access-token:${ACCESS_TOKEN}@github.com/${REPO_PATH}\"\n    elif [[ -n \"${USERNAME:-}\" ]]; then\n      HOST_PATH=\"${REPO_URL#https://}\"\n      REPO_URL=\"https://${USERNAME}:${ACCESS_TOKEN}@${HOST_PATH}\"\n    fi\n  fi\n\n  if [[ -d .git ]]; then\n    say \"Dépôt Git existant détecté.\"\n    git remote set-url origin \"$REPO_URL\" 2>/dev/null || true\n    if [[ \"${CLEAN_INSTALL:-0}\" == \"1\" ]]; then\n      say \"Nettoyage des fichiers suivis avant mise à jour...\"\n      git reset --hard\n    fi\n    git fetch --all --prune\n    if [[ -n \"${BRANCH:-}\" ]]; then\n      git checkout -B \"$BRANCH\" \"origin/$BRANCH\" 2>/dev/null || git checkout \"$BRANCH\"\n      git pull --ff-only origin \"$BRANCH\" || fail \"Impossible de mettre à jour la branche $BRANCH.\"\n    else\n      git pull --ff-only || fail \"Impossible de mettre à jour le dépôt.\"\n    fi\n  else\n    # Refuse d'écraser des fichiers préexistants hors .git.\n    if find . -mindepth 1 -maxdepth 1 ! -name '.nolvikae' -print -quit | grep -q .; then\n      fail \"Le dossier contient déjà des fichiers sans dépôt Git. Vide-le ou active CLEAN_INSTALL après avoir sauvegardé tes données.\"\n    fi\n    if [[ -n \"${BRANCH:-}\" ]]; then\n      git clone --depth 1 --single-branch --branch \"$BRANCH\" \"$REPO_URL\" /tmp/nolvikae-repo || fail \"Clonage GitHub impossible (URL, branche, droits ou réseau).\"\n    else\n      git clone --depth 1 \"$REPO_URL\" /tmp/nolvikae-repo || fail \"Clonage GitHub impossible (URL, droits ou réseau).\"\n    fi\n    cp -a /tmp/nolvikae-repo/. /mnt/server/\n    rm -rf /tmp/nolvikae-repo\n  fi\nfi\n\n# Création du logger avec 50 couleurs\ncat > /mnt/server/.nolvikae/logger.cjs <<'LOGGER'\n'use strict';\nconst { spawn } = require('node:child_process');\nconst path = require('node:path');\n\nconst main = (process.env.MAIN_FILE || 'index.js').trim();\nconst args = (process.env.NODE_ARGS || '').match(/(?:[^\\s\"]+|\"[^\"]*\")+/g) || [];\nconst cleanArgs = args.map(v => v.replace(/^\"|\"$/g, ''));\nconst useColors = !['0', 'false', 'off', 'no'].includes(String(process.env.COLOR_LOGS || '1').toLowerCase());\n\n// 50 couleurs RGB distinctes. La couleur change à chaque ligne complète affichée.\nconst palette = Array.from({ length: 50 }, (_, i) => {\n  const h = (i * 137.508) % 360;\n  const s = 78, l = 62;\n  const c = (1 - Math.abs(2 * l / 100 - 1)) * s / 100;\n  const x = c * (1 - Math.abs((h / 60) % 2 - 1));\n  const m = l / 100 - c / 2;\n  let r = 0, g = 0, b = 0;\n  if (h < 60) [r,g,b] = [c,x,0];\n  else if (h < 120) [r,g,b] = [x,c,0];\n  else if (h < 180) [r,g,b] = [0,c,x];\n  else if (h < 240) [r,g,b] = [0,x,c];\n  else if (h < 300) [r,g,b] = [x,0,c];\n  else [r,g,b] = [c,0,x];\n  return `\\x1b[38;2;${Math.round((r+m)*255)};${Math.round((g+m)*255)};${Math.round((b+m)*255)}m`;\n});\nlet lineNumber = 0;\nfunction pipeLines(stream, target) {\n  let pending = '';\n  stream.setEncoding('utf8');\n  stream.on('data', chunk => {\n    pending += chunk;\n    const lines = pending.split(/\\r?\\n/);\n    pending = lines.pop();\n    for (const line of lines) emit(line, target);\n  });\n  stream.on('end', () => { if (pending.length) emit(pending, target); });\n}\nfunction emit(line, target) {\n  const color = palette[lineNumber++ % palette.length];\n  target.write((useColors ? color : '') + line + (useColors ? '\\x1b[0m' : '') + '\\n');\n}\nconst entry = path.resolve(process.cwd(), main);\nif (!require('node:fs').existsSync(entry)) {\n  console.error(`[NOLVIKAE] Fichier de démarrage introuvable : ${main}`);\n  process.exit(1);\n}\nconsole.log(`[NOLVIKAE] Démarrage de ${main} — palette de 50 couleurs ${useColors ? 'activée' : 'désactivée'}.`);\nconst child = spawn('/mnt/server/.nolvikae/vendor/nodejs/bin/node', [entry, ...cleanArgs], {\n  cwd: process.cwd(),\n  env: { ...process.env, PATH: '/mnt/server/.nolvikae/vendor/nodejs/bin:' + process.env.PATH },\n  stdio: ['inherit', 'pipe', 'pipe']\n});\npipeLines(child.stdout, process.stdout);\npipeLines(child.stderr, process.stderr);\nchild.on('error', err => { console.error('[NOLVIKAE] Impossible de lancer Node.js:', err.message); process.exitCode = 1; });\nchild.on('exit', (code, signal) => {\n  if (signal) console.log(`[NOLVIKAE] Processus arrêté par ${signal}.`);\n  process.exitCode = code === null ? 1 : code;\n});\nfor (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));\nLOGGER\n\n# Création du script de démarrage\ncat > /mnt/server/.nolvikae/start.sh <<'START'\n#!/bin/bash\nset -Eeuo pipefail\ncd /home/container\n\n# Ajout de Node.js local au PATH\nexport PATH=\"/home/container/.nolvikae/vendor/nodejs/bin:$PATH\"\nexport NODE_PATH=\"/home/container/.nolvikae/vendor/nodejs/lib/node_modules\"\n\nif [[ \"${AUTO_UPDATE:-0}\" == \"1\" && -d .git ]]; then\n  echo \"[NOLVIKAE] Mise à jour Git activée.\"\n  git pull --ff-only || { echo \"[NOLVIKAE] Échec de git pull.\"; exit 1; }\nfi\n\nif [[ \"${INSTALL_ON_START:-0}\" == \"1\" && -f package.json ]]; then\n  echo \"[NOLVIKAE] Installation/vérification des dépendances npm...\"\n  if [[ -f package-lock.json ]]; then /home/container/.nolvikae/vendor/nodejs/bin/npm ci --omit=dev || /home/container/.nolvikae/vendor/nodejs/bin/npm install --omit=dev\n  else /home/container/.nolvikae/vendor/nodejs/bin/npm install --omit=dev\n  fi\nfi\n\nif [[ -n \"${NODE_PACKAGES:-}\" ]]; then\n  read -r -a packages <<< \"$NODE_PACKAGES\"\n  if (( ${#packages[@]} )); then /home/container/.nolvikae/vendor/nodejs/bin/npm install --no-save \"${packages[@]}\"; fi\nfi\n\nif [[ -n \"${UNNODE_PACKAGES:-}\" ]]; then\n  read -r -a packages <<< \"$UNNODE_PACKAGES\"\n  if (( ${#packages[@]} )); then /home/container/.nolvikae/vendor/nodejs/bin/npm uninstall \"${packages[@]}\"; fi\nfi\n\nexec /home/container/.nolvikae/vendor/nodejs/bin/node /home/container/.nolvikae/logger.cjs\nSTART\nchmod +x /mnt/server/.nolvikae/start.sh\n\n# Installation des dépendances npm avec Node.js local\nif [[ -f package.json ]]; then\n  say \"package.json trouvé.\"\n  if [[ \"${INSTALL_DEV_DEPENDENCIES:-0}\" == \"1\" ]]; then\n    /mnt/server/.nolvikae/vendor/nodejs/bin/npm install || fail \"npm install a échoué.\"\n  elif [[ -f package-lock.json ]]; then\n    /mnt/server/.nolvikae/vendor/nodejs/bin/npm ci --omit=dev || /mnt/server/.nolvikae/vendor/nodejs/bin/npm install --omit=dev || fail \"Installation des dépendances npm impossible.\"\n  else\n    /mnt/server/.nolvikae/vendor/nodejs/bin/npm install --omit=dev || fail \"Installation des dépendances npm impossible.\"\n  fi\nelse\n  say \"Aucun package.json détecté : dépôt cloné, aucune dépendance npm à installer.\"\nfi\n\nif [[ -n \"${NODE_PACKAGES:-}\" ]]; then\n  read -r -a packages <<< \"$NODE_PACKAGES\"\n  if (( ${#packages[@]} )); then /mnt/server/.nolvikae/vendor/nodejs/bin/npm install --no-save \"${packages[@]}\" || fail \"Installation des paquets supplémentaires impossible.\"; fi\nfi\n\nif [[ -n \"${UNNODE_PACKAGES:-}\" ]]; then\n  read -r -a packages <<< \"$UNNODE_PACKAGES\"\n  if (( ${#packages[@]} )); then /mnt/server/.nolvikae/vendor/nodejs/bin/npm uninstall \"${packages[@]}\" || say \"Désinstallation des paquets impossible (optionnel).\"; fi\nfi\n\nsay \"Installation terminée.\"\n",
       "container": "debian:bookworm-slim",
       "entrypoint": "bash"
     }
@@ -49,8 +49,8 @@
       "field_type": "text"
     },
     {
-      "name": "URL du dépôt GitHub",
-      "description": "URL HTTPS du dépôt, par exemple https://github.com/nolvikae/profile/ (sans /tree/branche).",
+      "name": "Git Repo Address",
+      "description": "GitHub Repo to clone\r\n\r\nI.E. https://github.com/nolvikae/profile",
       "env_variable": "GIT_ADDRESS",
       "default_value": "https://github.com/nolvikae/profile/",
       "user_viewable": true,
@@ -59,8 +59,8 @@
       "field_type": "text"
     },
     {
-      "name": "Branche Git",
-      "description": "Branche à cloner. Laisser vide pour la branche par défaut.",
+      "name": "Install Branch",
+      "description": "The branch to install.",
       "env_variable": "BRANCH",
       "default_value": "main",
       "user_viewable": true,
@@ -69,8 +69,28 @@
       "field_type": "text"
     },
     {
-      "name": "Fichier principal",
-      "description": "Chemin du fichier JavaScript principal, relatif à la racine du dépôt. Ex. src/index.js.",
+      "name": "User Uploaded Files",
+      "description": "Skip all the install stuff if you are letting a user upload files.\r\n\r\n0 = false (default)\r\n1 = true",
+      "env_variable": "USER_UPLOAD",
+      "default_value": "0",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    },
+    {
+      "name": "Auto Update",
+      "description": "Pull the latest files on startup when using a GitHub repo.",
+      "env_variable": "AUTO_UPDATE",
+      "default_value": "0",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    },
+    {
+      "name": "Main file",
+      "description": "The file that starts the app.\r\nCan be .js and .ts",
       "env_variable": "MAIN_FILE",
       "default_value": "index.js",
       "user_viewable": true,
@@ -79,8 +99,8 @@
       "field_type": "text"
     },
     {
-      "name": "Arguments Node.js",
-      "description": "Arguments transmis au fichier principal.",
+      "name": "Additional Arguments.",
+      "description": "Any extra arguments for nodejs or ts-node",
       "env_variable": "NODE_ARGS",
       "default_value": "",
       "user_viewable": true,
@@ -89,13 +109,43 @@
       "field_type": "text"
     },
     {
-      "name": "Mise à jour Git au démarrage",
-      "description": "1 = exécute git pull au démarrage si le dépôt est un dépôt Git.",
-      "env_variable": "AUTO_UPDATE",
-      "default_value": "0",
+      "name": "Additional Node packages",
+      "description": "Install additional node packages.\r\n\r\nUse spaces to separate.",
+      "env_variable": "NODE_PACKAGES",
+      "default_value": "",
       "user_viewable": true,
       "user_editable": true,
-      "rules": "required|boolean",
+      "rules": "nullable|string|max:512",
+      "field_type": "text"
+    },
+    {
+      "name": "Uninstall Node packages",
+      "description": "Uninstall node packages.\r\n\r\nUse spaces to separate.",
+      "env_variable": "UNNODE_PACKAGES",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:512",
+      "field_type": "text"
+    },
+    {
+      "name": "Git Username",
+      "description": "Username to auth with git.",
+      "env_variable": "USERNAME",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string",
+      "field_type": "text"
+    },
+    {
+      "name": "Git Access Token",
+      "description": "Password to use with git.\r\n\r\nIt's best practice to use a Personal Access Token.\r\nhttps://github.com/settings/tokens\r\nhttps://gitlab.com/-/profile/personal_access_tokens",
+      "env_variable": "ACCESS_TOKEN",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "nullable|string",
       "field_type": "text"
     },
     {
@@ -123,46 +173,6 @@
       "description": "1 = activer la palette de 50 couleurs ; 0 = désactiver les couleurs.",
       "env_variable": "COLOR_LOGS",
       "default_value": "1",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|boolean",
-      "field_type": "text"
-    },
-    {
-      "name": "Paquets npm supplémentaires",
-      "description": "Noms de paquets npm séparés par des espaces.",
-      "env_variable": "NODE_PACKAGES",
-      "default_value": "",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|string|max:512",
-      "field_type": "text"
-    },
-    {
-      "name": "GitHub username (facultatif)",
-      "description": "Nom d'utilisateur pour un dépôt privé. Préférer un token à droits minimaux.",
-      "env_variable": "USERNAME",
-      "default_value": "",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|string",
-      "field_type": "text"
-    },
-    {
-      "name": "GitHub access token (facultatif)",
-      "description": "Token GitHub pour un dépôt privé. Traité comme secret par le panel si possible ; ne le partage jamais.",
-      "env_variable": "ACCESS_TOKEN",
-      "default_value": "",
-      "user_viewable": false,
-      "user_editable": true,
-      "rules": "nullable|string",
-      "field_type": "text"
-    },
-    {
-      "name": "Fichiers déjà présents",
-      "description": "1 = ignore le clonage GitHub (à utiliser uniquement si tu gères les fichiers manuellement).",
-      "env_variable": "USER_UPLOAD",
-      "default_value": "0",
       "user_viewable": true,
       "user_editable": true,
       "rules": "required|boolean",
